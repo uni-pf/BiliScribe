@@ -1,0 +1,9 @@
+yt-dlp>=2024.0.0
+faster-whisper>=1.0.0
+imageio-ffmpeg>=0.5.0
+
+# Optional: for speaker diarization
+# pyannote.audio>=3.0.0
+
+# Optional: for model pre-download
+# huggingface_hub>=0.20.0
