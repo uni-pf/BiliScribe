@@ -784,6 +784,70 @@ def check_env() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 6c. Claude Code 输出模式
+# ---------------------------------------------------------------------------
+def format_claude_summary(chosen_model: str, run_dir: str, progress: dict,
+                          device: str) -> str:
+    """生成 Claude Code 友好的结构化文本摘要。"""
+    lines = []
+    lines.append("=" * 60)
+    lines.append("  BiliScribe — 转录完成报告")
+    lines.append("=" * 60)
+    lines.append("")
+
+    total = progress.get("total", 0)
+    done = len(progress.get("done", {}))
+    failed = len(progress.get("failed", {}))
+    total_chars = 0
+    total_duration = 0.0
+
+    for r in progress.get("results", []):
+        total_chars += r.get("chars", r.get("c", 0))
+        total_duration += r.get("duration_sec", r.get("d", 0.0))
+
+    lines.append(f"📊 统计")
+    lines.append(f"  文件数:    {done}/{total} (失败 {failed})")
+    lines.append(f"  总字数:    {total_chars:,}")
+    lines.append(f"  总时长:    {total_duration:.0f}s ({total_duration/60:.1f} 分钟)")
+    lines.append(f"  模型:      {chosen_model}")
+    lines.append(f"  设备:      {device.upper()}")
+    lines.append(f"  输出目录:  {run_dir}")
+    lines.append("")
+
+    if progress.get("results"):
+        lines.append("📄 文件清单")
+        lines.append("-" * 60)
+        for r in progress["results"]:
+            txt_path = r.get("txt", r.get("tx", ""))
+            srt_path = r.get("srt", r.get("sr", ""))
+            chars = r.get("chars", r.get("c", 0))
+            dur = r.get("duration_sec", r.get("d", 0))
+            preview = r.get("preview", "")
+            lang = r.get("language", r.get("l", "zh"))
+            err = r.get("error", "")
+            vid_label = os.path.basename(str(txt_path)) if txt_path else "?"
+            if err:
+                lines.append(f"  ❌ {vid_label}: {err}")
+            else:
+                lines.append(f"  📝 {vid_label}")
+                lines.append(f"     ({chars} 字, {dur:.0f}s, {lang})")
+                if preview:
+                    lines.append(f"     预览: {preview[:200]}...")
+        lines.append("-" * 60)
+
+    if failed > 0:
+        lines.append("")
+        lines.append("⚠️ 失败项")
+        for vid, err in progress.get("failed", {}).items():
+            lines.append(f"  ❌ {vid}: {err}")
+
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("提示: 需要查看完整文件可用 present_files 或 cat 命令。")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # 7. 主流程
 # ---------------------------------------------------------------------------
 def main(argv=None) -> int:
@@ -842,7 +906,18 @@ def main(argv=None) -> int:
     p.add_argument("--min-silence-duration-ms", type=int, default=500,
                    help="VAD 最小静音时长(毫秒), 控制分段灵敏度。默认 500,"
                         " 越大则句子越连贯, 越小则分段越细")
+    # === Claude Code 模式 ===
+    p.add_argument("--claude", action="store_true",
+                   help="Claude Code 输出模式: 输出结构化摘要文本,"
+                        " 自动启用 --compact --preview 300,"
+                        " 方便 Claude 直接读取和处理转录结果")
     args = p.parse_args(argv)
+
+    # Claude 模式自动启用精简输出 + 预览
+    if args.claude:
+        if args.preview == 0:
+            args.preview = 300
+        args.compact = True
 
     # 环境检查模式
     if args.check_env:
@@ -864,10 +939,25 @@ def main(argv=None) -> int:
         except RuntimeError as e:
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
             return 1
-        print(json.dumps(
-            {"ok": True, "mode": "list", "count": len(items), "videos": items},
-            ensure_ascii=False,
-        ))
+        if args.claude:
+            lines = ["=" * 60,
+                     "  BiliScribe — 视频清单",
+                     "=" * 60, ""]
+            lines.append(f"📋 共 {len(items)} 个视频")
+            lines.append("")
+            for it in items:
+                dur = it.get("duration", "")
+                dur_str = f"{dur}s" if dur else "?"
+                lines.append(f"  #{it['index']:>3}  {it['id']}  {it['title']}  ({dur_str})")
+            lines.append("")
+            lines.append("-" * 60)
+            lines.append("提示: 加 --limit N 限制处理数量")
+            print("\n".join(lines))
+        else:
+            print(json.dumps(
+                {"ok": True, "mode": "list", "count": len(items), "videos": items},
+                ensure_ascii=False,
+            ))
         return 0
 
     # 下载 + 转录
@@ -1179,7 +1269,13 @@ def main(argv=None) -> int:
             for r in progress["results"]
         ],
     }
-    print(json.dumps(summary, ensure_ascii=False))
+
+    if args.claude:
+        print(format_claude_summary(chosen_model, run_dir, progress, device))
+        # NOTA: --claude 模式下仍输出 JSON 到 stderr 供程序化使用
+        print(json.dumps(summary, ensure_ascii=False), file=sys.stderr)
+    else:
+        print(json.dumps(summary, ensure_ascii=False))
     return 0
 
 

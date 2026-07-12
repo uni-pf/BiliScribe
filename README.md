@@ -64,6 +64,66 @@ python scripts/transcribe.py dummy --check-env
 | `large-v3` | 3 GB | 慢 | ⭐⭐⭐⭐⭐ | 术语多/精度要求高 |
 | `auto` | — | 按时长自动选 | 平衡 | 省心模式 |
 
+## 🤖 Claude Code 使用指南
+
+### 安装（Claude Code 环境）
+
+在 Claude Code 终端中直接执行：
+
+```bash
+# 克隆项目
+git clone https://github.com/uni-pf/BiliScribe.git
+cd BiliScribe
+
+# 创建 venv + 装依赖
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 预下载模型（推荐）
+python scripts/setup_env.py --download-model medium
+```
+
+### 在 Claude Code 中调用
+
+```bash
+# 转录 B 站视频，自动输出 Claude 友好格式
+python scripts/transcribe.py "BV1xx411c7mD" --lang zh --claude
+
+# 使用入口脚本（推荐）
+chmod +x biliscribe
+./biliscribe "BV1xx" --lang zh --claude
+```
+
+`--claude` 模式会自动：
+- 启用精简 JSON 输出（`--compact`）
+- 附带 300 字符内容预览（`--preview 300`）
+- 输出人类可读的结构化报告，Claude 可以直接阅读和总结
+
+### 在 Claude Code 中做内容总结
+
+转录完成后，Claude 可以直接读取输出文件做后续处理：
+
+```bash
+# 先转录
+./biliscribe "BV1xx" --lang zh --claude
+
+# 让 Claude 总结转录结果
+# → 直接问 Claude："帮我把这个视频的内容总结一下要点"
+```
+
+### 作为 Claude Code 的 MCP 工具（进阶）
+
+你也可以创建一个简单的 shell 别名让调用更简洁：
+
+```bash
+# 添加到 ~/.bashrc 或 ~/.zshrc
+alias biliscribe='cd ~/BiliScribe && ./biliscribe'
+
+# 之后直接：
+biliscribe "BV1xx" --lang zh --claude
+```
+
 ## 📖 完整用法
 
 ```

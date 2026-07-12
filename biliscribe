@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# BiliScribe CLI entry point (Unix / Claude Code)
+# Usage: biliscribe <BV号/链接> [options]
+#
+# Add to PATH or symlink:
+#   ln -s "$PWD/biliscribe" /usr/local/bin/biliscribe
+#
+# Then simply: biliscribe "BV1xx" --lang zh
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+
+if [ -f "$VENV_PYTHON" ]; then
+    PYTHON="$VENV_PYTHON"
+else
+    PYTHON="python3"
+    # fallback
+    command -v python3 >/dev/null 2>&1 || PYTHON="python"
+fi
+
+exec "$PYTHON" "$SCRIPT_DIR/scripts/transcribe.py" "$@"
