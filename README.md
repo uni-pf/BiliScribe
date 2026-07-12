@@ -3,8 +3,7 @@
 **把 B 站（以及 yt-dlp 支持的任何平台）视频语音转为文字。**  
 免费、离线、本地运行——你的视频内容你做主。
 
-> 📦 这是一个 **WorkBuddy Skill**，`SKILL.md` 是技能入口。  
-> 也可作为独立 CLI 工具使用，见下方快速开始。
+> 📦 这是一个 **WorkBuddy Skill**（`SKILL.md` 入口），也是 **Claude Code 原生工具**（`CLAUDE.md` 入口）。
 
 ---
 
@@ -67,10 +66,28 @@ python scripts/transcribe.py dummy --check-env
 | `large-v3` | 3 GB | 慢 | ⭐⭐⭐⭐⭐ | 术语多/精度要求高 |
 | `auto` | — | 按时长自动选 | 平衡 | 省心模式 |
 
-## 🤖 Claude Code 使用指南
+## 🤖 Claude Code 原生支持
 
-这个仓库同时也是 WorkBuddy 的 Skill（`SKILL.md` 为入口）。  
-如果要在 Claude Code 中作为独立工具使用：
+这个仓库同时是 **Claude Code 原生工具**：
+
+| 文件 | 作用 |
+|------|------|
+| `CLAUDE.md` | Claude Code 项目指令（Claude 自动读取） |
+| `.claude/settings.json` | 自定义斜杠命令配置 |
+
+### 自定义斜杠命令
+
+在 Claude Code 终端中可直接输入：
+
+| 命令 | 作用 |
+|------|------|
+| `/transcribe <BV号>` | 转录 B 站视频（中文） |
+| `/transcribe-en <链接>` | 转录英文/外语视频 |
+| `/list-videos <链接>` | 枚举合集视频清单 |
+| `/batch-transcribe <链接> <N>` | 批量转录合集前 N 集 |
+| `/check-env` | 检查运行环境 |
+
+### 在 Claude Code 中使用
 
 ```bash
 # 克隆
@@ -83,9 +100,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/setup_env.py --download-model medium
 
-# 转录，claude 模式输出结构化结果
+# 转录（--claude 输出结构化结果）
 python scripts/transcribe.py "BV1xx" --lang zh --claude
 ```
+
+`--claude` 模式自动启用精简输出 + 300 字预览，Claude 可直接阅读和总结转录内容。
 
 ## 📖 完整用法
 
@@ -150,14 +169,17 @@ HF_TOKEN="your_token" python scripts/transcribe.py "BV1xx" --diarize
 
 ```
 BiliScribe/
-├── SKILL.md              # WorkBuddy 技能入口
+├── CLAUDE.md              # Claude Code 项目指令
+├── SKILL.md               # WorkBuddy 技能入口
+├── .claude/
+│   └── settings.json      # Claude Code 斜杠命令配置
 ├── scripts/
-│   ├── transcribe.py    # 主程序
-│   ├── setup_env.py     # 环境安装工具
-│   └── gpu_utils.py     # GPU 检测与启用
+│   ├── transcribe.py     # 主程序
+│   ├── setup_env.py      # 环境安装工具
+│   └── gpu_utils.py      # GPU 检测与启用
 ├── references/
-│   ├── asr_engines.md   # ASR 引擎说明
-│   └── bilibili_api.md  # B 站输入格式参考
+│   ├── asr_engines.md    # ASR 引擎说明
+│   └── bilibili_api.md   # B 站输入格式参考
 ├── requirements.txt
 ├── README.md
 └── LICENSE

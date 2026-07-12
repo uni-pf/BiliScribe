@@ -1,0 +1,62 @@
+{
+  "customCommands": [
+    {
+      "name": "transcribe",
+      "description": "转录 B站/YouTube 视频为文字",
+      "command": "python scripts/transcribe.py \"${input}\" --lang zh --claude",
+      "args": [
+        {
+          "name": "input",
+          "description": "BV号 / av号 / 完整视频链接",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "transcribe-en",
+      "description": "转录英文/外语视频为文字",
+      "command": "python scripts/transcribe.py \"${input}\" --lang auto --claude",
+      "args": [
+        {
+          "name": "input",
+          "description": "BV号 / av号 / 完整视频链接",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "list-videos",
+      "description": "枚举系列/合集中的所有视频",
+      "command": "python scripts/transcribe.py \"${input}\" --list-only --claude",
+      "args": [
+        {
+          "name": "input",
+          "description": "合集链接 / BV号",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "batch-transcribe",
+      "description": "批量转录合集前 N 个视频",
+      "command": "python scripts/transcribe.py \"${input}\" --lang zh --limit ${limit} --claude",
+      "args": [
+        {
+          "name": "input",
+          "description": "合集链接 / BV号",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "处理前 N 个视频 (默认 5)",
+          "default": "5"
+        }
+      ]
+    },
+    {
+      "name": "check-env",
+      "description": "检查 BiliScribe 运行环境",
+      "command": "python scripts/transcribe.py dummy --check-env"
+    }
+  ]
+}
