@@ -324,6 +324,9 @@ def download_audio(url: str, run_dir: str, limit: Optional[int],
         args = ["--playlist-end", str(limit), *args]
     if playlist_items:
         args = ["--playlist-items", playlist_items, *args]
+        # --resume 场景: yt-dlp 默认 --no-overwrites（不覆盖已有文件），
+        # 旧 run_dir 可能残留不完整音轨 → 强制覆盖避免用坏文件
+        args = ["--force-overwrites", *args]
     log("进度", f"正在下载音轨: {url}")
     _run_ytdlp(args)
     files = sorted(
@@ -1248,7 +1251,7 @@ def main(argv=None) -> int:
     pending: List[str] = []
     for af in audio_files:
         vid = _video_id_from_path(af)
-        if vid in progress["done"]:
+        if vid in progress.get("done", {}):
             log("跳过", f"已完成, 跳过转录: {vid}")
             continue
         pending.append(af)
