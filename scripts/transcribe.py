@@ -44,6 +44,8 @@
    GPU 检测/启用逻辑已下沉到独立模块 gpu_utils.py。
 3. 本地模型目录: 用 BILI2TEXT_MODEL_DIR 指向已落地的模型目录(含 model.bin +
    配置文件), 跳过 HF 缓存/下载, 最稳。setup_env.py --download-model 可一键预下载。
+   模型/缓存/输出默认落在持久化根 BILI_HOME(D:\\workbuddy\\.bili-transcriber,
+   可用环境变量覆盖), 与技能目录、安装目录相互独立, 避免技能更新时数据丢失。
 """
 from __future__ import annotations
 
@@ -58,6 +60,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
+import datetime
+
+# 统一数据目录解析(单一事实来源, 独立于技能/安装目录)
+from bili_paths import (
+    get_bili_home, get_models_dir, get_cache_dir, get_transcripts_dir,
+    ensure_dir, legacy_skill_models_dir,
+)
 
 AUDIO_EXT = re.compile(r"\.(m4a|opus|webm|mp3|ogg|aac|flac|wav)$", re.I)
 
@@ -68,8 +77,6 @@ VOCAB_ALTERNATIVES = ["vocabulary.txt", "vocab.json"]
 # ---------------------------------------------------------------------------
 # 0a. 日志辅助 — 带时间戳的进度输出, 便于 agent 解析而非猜进度
 # ---------------------------------------------------------------------------
-import datetime
-
 _LOG_TS_FORMAT = "%H:%M:%S"
 
 def log(tag: str, msg: str, *,
@@ -175,7 +182,12 @@ def convert_to_wav(src: str, ffmpeg: str, dst_dir: Optional[str] = None) -> str:
 def _run_ytdlp(args: List[str]) -> subprocess.CompletedProcess:
     cmd = [sys.executable, "-m", "yt_dlp", *args]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            "yt-dlp 下载超时(10分钟)。可能是网络问题或视频过长, "
+            "建议重试或改用较短视频。"
+        )
     except FileNotFoundError:
         raise RuntimeError(
             "未找到 yt-dlp。请先运行 scripts/setup_env.py 安装依赖。"
@@ -233,9 +245,9 @@ def list_videos(url: str) -> List[dict]:
 
 
 def _make_run_dir(out_dir: str) -> str:
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = ensure_dir(out_dir)
     run_dir = os.path.join(out_dir, f"run_{int(time.time())}")
-    os.makedirs(run_dir, exist_ok=True)
+    run_dir = ensure_dir(run_dir)
     return run_dir
 
 
@@ -357,13 +369,15 @@ def _resolve_local_model(model_size: str) -> str:
     命中且完整性校验通过则返回该目录; 否则原样返回 model_size
     (交给 faster-whisper 走 HF 默认缓存)。完整性不通过时打印警告。
     """
-    for cand in (
-        os.environ.get("BILI2TEXT_MODEL_DIR", ""),
-        os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "models", model_size,
-        ),
-    ):
+    cands = []
+    env = os.environ.get("BILI2TEXT_MODEL_DIR", "").strip()
+    if env:
+        cands.append(env)
+    # 持久化根下的模型目录(默认位置, 独立于技能/安装目录)
+    cands.append(os.path.join(get_models_dir(), model_size))
+    # 兼容旧版: 技能目录内的 models/(更新时可能被覆盖, 仅作回退)
+    cands.append(os.path.join(legacy_skill_models_dir(), model_size))
+    for cand in cands:
         if not cand or not os.path.isdir(cand):
             continue
         ok, missing = _validate_local_model(cand)
@@ -407,10 +421,25 @@ def load_model(model_size: str, device: str, compute_type: str):
         raise
 
 
+def _watchdog_logger(audio_path: str, fn_start: float,
+                     stop_event: threading.Event) -> None:
+    """后台线程: model.transcribe() 阻塞期间每 15 秒输出一次进度心跳。"""
+    basename = os.path.basename(audio_path)
+    while not stop_event.is_set():
+        # 最多等 15 秒再检查一次, 但一旦停止事件到达就立即退出
+        if stop_event.wait(15):
+            break
+        elapsed = time.time() - fn_start
+        log("进度", f"仍在识别: {basename} (已用 {elapsed:.0f} 秒)")
+
+
 def transcribe_file(model, audio_path: str, lang: Optional[str],
                     model_lock: Optional[threading.Lock] = None,
                     min_silence_duration_ms: int = 500):
     """返回 (segments, info)。segments = [(start, end, text), ...]
+
+    在阻塞的 model.transcribe() 期间自动启动 watchdog 线程
+    (每 15 秒输出一次进度到 stderr), 避免长音频时 agent 空等无反馈。
 
     model_lock: 并发场景下保护 model.transcribe 调用(GPU 模式或保守并发时建议传入)。
     min_silence_duration_ms: VAD 最小静音时长(毫秒), 控制分段灵敏度。
@@ -422,16 +451,37 @@ def transcribe_file(model, audio_path: str, lang: Optional[str],
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=min_silence_duration_ms),
     )
-    if model_lock is not None:
-        with model_lock:
+
+    # --- watchdog 线程: 阻塞期间每 15s 发一次心跳 ---
+    _start = time.time()
+    _stop = threading.Event()
+    _wd = threading.Thread(
+        target=_watchdog_logger,
+        args=(audio_path, _start, _stop),
+        daemon=True,
+    )
+    _wd.start()
+
+    try:
+        if model_lock is not None:
+            with model_lock:
+                seg_iter, info = model.transcribe(audio_path, **kwargs)
+        else:
             seg_iter, info = model.transcribe(audio_path, **kwargs)
-    else:
-        seg_iter, info = model.transcribe(audio_path, **kwargs)
+    finally:
+        _stop.set()   # 让 watchdog 退出 while 循环
+
     segments: List[Tuple[float, float, str]] = []
+    seg_count = 0
     for seg in seg_iter:
         text = (seg.text or "").strip()
         if text:
             segments.append((seg.start, seg.end, text))
+            seg_count += 1
+
+    elapsed = time.time() - _start
+    log("完成", f"识别完成: {os.path.basename(audio_path)} "
+               f"({elapsed:.0f}s, {seg_count} 段, {len(segments)} 有效段)")
     return segments, info
 
 
@@ -606,7 +656,7 @@ def diarize_segments(audio_path: str, segments, hf_token: Optional[str] = None):
         )
     log("进度", f"说话人分离中: {os.path.basename(audio_path)}")
     pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1", use_auth_token=token
+        "pyannote/speaker-diarization-3.1", token=token
     )
     diarization = pipeline(audio_path, num_speakers=None)
 
@@ -651,7 +701,10 @@ def save_progress(run_dir: str, progress: dict) -> None:
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(progress, f, ensure_ascii=False)
-        os.replace(tmp, p)
+        try:
+            os.replace(tmp, p)
+        except OSError:
+            shutil.move(tmp, p)  # 跨文件系统回退(如跨盘)
     except OSError as e:
         log("提示", f"progress.json 写入跳过: {e}")
 
@@ -672,7 +725,10 @@ def write_external_progress(progress_file: str, progress: dict) -> None:
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(snapshot, f, ensure_ascii=False)
-        os.replace(tmp, progress_file)
+        try:
+            os.replace(tmp, progress_file)
+        except OSError:
+            shutil.move(tmp, progress_file)  # 跨文件系统回退
     except OSError as e:
         log("提示", f"外部进度文件写入跳过: {e}")
 
@@ -728,21 +784,24 @@ def check_env() -> dict:
             report["model"]["status"] = f"⚠️ 不完整 (缺少: {', '.join(missing)})"
             report["model"]["size_mb"] = "?"
     else:
-        # 扫描技能自带模型目录
-        builtin_models = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "models"
-        )
-        if os.path.isdir(builtin_models):
-            available = []
-            for d in sorted(os.listdir(builtin_models)):
-                dpath = os.path.join(builtin_models, d)
+        # 扫描持久化根下的模型目录(默认位置, 独立于技能目录)
+        builtin_models = get_models_dir()
+        legacy_models = legacy_skill_models_dir()
+        available = []
+        for base in (builtin_models, legacy_models):
+            if not os.path.isdir(base):
+                continue
+            for d in sorted(os.listdir(base)):
+                dpath = os.path.join(base, d)
                 if os.path.isdir(dpath):
                     ok, _ = _validate_local_model(dpath)
-                    available.append(f"{d} ({'✅' if ok else '⚠️'})")
-            report["model"]["builtin_models"] = available if available else "(无)"
-        else:
-            report["model"]["builtin_models"] = "(目录不存在)"
+                    tag = "✅" if ok else "⚠️"
+                    label = f"{d} ({tag})"
+                    if base == legacy_models:
+                        label += " [旧版技能目录, 建议迁移]"
+                    available.append(label)
+        report["model"]["builtin_models"] = available if available else "(无)"
+        report["model"]["home"] = get_bili_home()
 
     # GPU 检测
     try:
@@ -762,7 +821,7 @@ def check_env() -> dict:
     # 磁盘可用空间(输出目录)
     out_dir_candidates = [
         os.environ.get("BILI_OUT_DIR", ""),
-        "./bili_transcripts",
+        get_transcripts_dir(),
     ]
     for d in out_dir_candidates:
         if d:
@@ -791,7 +850,7 @@ def format_claude_summary(chosen_model: str, run_dir: str, progress: dict,
     """生成 Claude Code 友好的结构化文本摘要。"""
     lines = []
     lines.append("=" * 60)
-    lines.append("  BiliScribe — 转录完成报告")
+    lines.append("  bilibili-transcriber — 转录完成报告")
     lines.append("=" * 60)
     lines.append("")
 
@@ -857,7 +916,9 @@ def main(argv=None) -> int:
         description="将 B站(及其他平台)视频转为文字(纯文本 / SRT 字幕)"
     )
     p.add_argument("input", help="B站链接 / BV号 / av号 / b23.tv 短链")
-    p.add_argument("--out-dir", default="./bili_transcripts", help="输出根目录")
+    p.add_argument("--out-dir", default="",
+                   help="输出根目录(默认: <BILI_HOME>/transcripts, "
+                        "可用 BILI_HOME 环境变量覆盖)")
     p.add_argument("--list-only", action="store_true",
                    help="仅列出系列/分P视频, 不下载也不转录")
     p.add_argument("--limit", type=int, default=0,
@@ -913,6 +974,14 @@ def main(argv=None) -> int:
                         " 方便 Claude 直接读取和处理转录结果")
     args = p.parse_args(argv)
 
+    # 解析持久化输出根目录(默认 <BILI_HOME>/transcripts, 独立于技能/安装目录)
+    if not args.out_dir:
+        args.out_dir = get_transcripts_dir()
+
+    # 转录缓存默认从环境变量读取(兼容 SKILL.md 配置)
+    if not args.transcript_cache:
+        args.transcript_cache = os.environ.get("BILI_TRANSCRIPT_CACHE", "")
+
     # Claude 模式自动启用精简输出 + 预览
     if args.claude:
         if args.preview == 0:
@@ -941,7 +1010,7 @@ def main(argv=None) -> int:
             return 1
         if args.claude:
             lines = ["=" * 60,
-                     "  BiliScribe — 视频清单",
+                     "  bilibili-transcriber — 视频清单",
                      "=" * 60, ""]
             lines.append(f"📋 共 {len(items)} 个视频")
             lines.append("")
@@ -963,7 +1032,7 @@ def main(argv=None) -> int:
     # 下载 + 转录
     formats = {"txt", "srt"} if args.format == "both" else {args.format}
     lang = None if args.lang == "auto" else args.lang
-    cache_dir = args.cache_dir or os.path.join(args.out_dir, ".audio_cache")
+    cache_dir = args.cache_dir or get_cache_dir()
 
     try:
         # === 断点续传: 决定 run_dir 与已有进度 ===
@@ -1106,11 +1175,16 @@ def main(argv=None) -> int:
         total_audio_sec = 0.0
         for af in audio_files:
             try:
-                import subprocess as _sp
-                probe = _sp.run(
-                    [ffmpeg, "-i", af, "-f", "null", "-"],
-                    capture_output=True, text=True, stderr=_sp.PIPE
-                )
+                try:
+                    # timeout=30: 防损坏音频文件导致 ffmpeg 无限挂起
+                    probe = subprocess.run(
+                        [ffmpeg, "-i", af, "-f", "null", "-"],
+                        capture_output=True, text=True, timeout=30
+                    )
+                except subprocess.TimeoutExpired:
+                    log("警告", f"ffmpeg 时长探测超时, 跳过: "
+                                f"{os.path.basename(af)}")
+                    continue
                 # ffmpeg 在 stderr 输出 "Duration: HH:MM:SS.mm"
                 for line in probe.stderr.splitlines():
                     if "Duration" in line:
