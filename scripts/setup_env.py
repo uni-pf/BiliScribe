@@ -28,7 +28,8 @@ ctranslate2 包目录, 从而**一键启用 GPU**, 无需手动安装 CUDA Toolk
     HF_HUB_DISABLE_SYMLINKS=1           (改用复制, 不用符号链接)
     HF_HUB_DISABLE_XET=1                (走普通 HTTPS, 不走 Xet/CAS)
     CODEBUDDY_SAFE_DELETE_SANDBOX=0     (避免沙箱删除钩子抛错)
-  并把模型落地到 <技能目录>/models/<name>/ (含 model.bin), 之后用环境变量
+   并把模型落地到 <BILI_HOME>/models/<name>/ (含 model.bin, BILI_HOME 默认
+   D:\\workbuddy\\.bili-transcriber, 可用环境变量覆盖), 之后用环境变量
     BILI2TEXT_MODEL_DIR 指向它即可离线、稳定加载, 无需再碰 HF 缓存。
 """
 import argparse
@@ -39,6 +40,8 @@ import sys
 
 # GPU 检测/启用逻辑已下沉到独立模块 gpu_utils, 本脚本与 transcribe.py 共用
 from gpu_utils import detect_gpu, enable_gpu, resolve_device_arg
+# 统一数据目录解析(单一事实来源, 独立于技能/安装目录)
+from bili_paths import get_models_dir, get_bili_home, ensure_dir
 
 PKGS = [
     "yt-dlp",
@@ -76,8 +79,11 @@ def install_packages() -> int:
         try:
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--upgrade", pkg],
-                check=True,
+                check=True, timeout=300,  # 5 分钟超时, 防网络卡死
             )
+        except subprocess.TimeoutExpired:
+            print(f"[错误] 安装 {pkg} 超时(5分钟)。请检查网络连接后重试。", file=sys.stderr)
+            return 1
         except subprocess.CalledProcessError as e:
             print(f"[错误] 安装 {pkg} 失败: {e}", file=sys.stderr)
             return 1
@@ -94,8 +100,9 @@ def predownload_model(name: str) -> int:
         print("[错误] 缺少 huggingface_hub, 请先: pip install huggingface_hub",
               file=sys.stderr)
         return 1
-    skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    local_dir = os.path.join(skill_dir, "models", name)
+    # 落到持久化根下的模型目录(默认 BILI_HOME/models, 独立于技能/安装目录)
+    local_dir = os.path.join(get_models_dir(), name)
+    ensure_dir(os.path.dirname(local_dir))
     print(f"\n=== 预下载 whisper 模型: {name} ===", file=sys.stderr)
     print(f"目标目录: {local_dir}", file=sys.stderr)
     try:
