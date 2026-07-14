@@ -438,7 +438,8 @@ def _watchdog_logger(audio_path: str, fn_start: float,
 
 def transcribe_file(model, audio_path: str, lang: Optional[str],
                     model_lock: Optional[threading.Lock] = None,
-                    min_silence_duration_ms: int = 500):
+                    min_silence_duration_ms: int = 500,
+                    batch_size: int = 0):
     """返回 (segments, info)。segments = [(start, end, text), ...]
 
     在阻塞的 model.transcribe() 期间自动启动 watchdog 线程
@@ -446,6 +447,8 @@ def transcribe_file(model, audio_path: str, lang: Optional[str],
 
     model_lock: 并发场景下保护 model.transcribe 调用(GPU 模式或保守并发时建议传入)。
     min_silence_duration_ms: VAD 最小静音时长(毫秒), 控制分段灵敏度。
+    batch_size: faster-whisper 批处理大小。0=使用引擎默认值(通常较低);
+               GPU 推荐 64-128 以充分利用显存并行能力。
     """
     log("进度", f"识别中: {os.path.basename(audio_path)}")
     kwargs = dict(
@@ -454,6 +457,8 @@ def transcribe_file(model, audio_path: str, lang: Optional[str],
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=min_silence_duration_ms),
     )
+    if batch_size > 0:
+        kwargs["batch_size"] = batch_size
 
     # --- watchdog 线程: 阻塞期间每 15s 发一次心跳 ---
     _start = time.time()
@@ -970,6 +975,9 @@ def main(argv=None) -> int:
     p.add_argument("--min-silence-duration-ms", type=int, default=500,
                    help="VAD 最小静音时长(毫秒), 控制分段灵敏度。默认 500,"
                         " 越大则句子越连贯, 越小则分段越细")
+    p.add_argument("--batch-size", type=int, default=0,
+                   help="faster-whisper 批处理大小。GPU 推荐 64-128 以充分利用显存,"
+                        " CPU 保持默认 0 即可(0=引擎默认值)")
     # === Claude Code 模式 ===
     p.add_argument("--claude", action="store_true",
                    help="Claude Code 输出模式: 输出结构化摘要文本,"
@@ -1178,6 +1186,11 @@ def main(argv=None) -> int:
             log("进度", f"模型自动选择: 总时长 {total_dur:.0f}s -> {chosen_model}")
         model = load_model(chosen_model, device, compute)
 
+        # GPU 模式下自动设置合理的 batch_size(引擎默认值通常太低)
+        if args.batch_size == 0 and device == "cuda":
+            args.batch_size = 64
+            log("进度", f"GPU 模式: batch_size 自动设为 64 (可用 --batch-size 覆盖)")
+
         # === 预计耗时估算(让用户有心理预期) ===
         total_audio_sec = 0.0
         for af in audio_files:
@@ -1255,7 +1268,8 @@ def main(argv=None) -> int:
     def _transcribe_one(audio_path: str) -> Tuple[str, dict]:
         try:
             segments, info = transcribe_file(model, audio_path, lang, model_lock,
-                                             min_silence_duration_ms=args.min_silence_duration_ms)
+                                             min_silence_duration_ms=args.min_silence_duration_ms,
+                                             batch_size=args.batch_size)
             det = getattr(info, "language", lang or "auto")
             # 说话人分离(可选): 失败则降级为普通转录
             if args.diarize:
