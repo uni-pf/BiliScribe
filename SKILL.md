@@ -12,6 +12,24 @@ agent_created: true
 **解析输入(BV/av/链接) → yt-dlp 下载最佳音轨 → faster-whisper 中文语音识别
 → 输出纯文本与/或 SRT 字幕**。内置系列视频枚举、错误映射与"省 token"输出约定。
 
+## 🚀 快速启动决策树 (Agent 必读)
+
+**首次使用本技能的用户**，按以下流程执行。**注意：首次安装约需下载 1.5GB 模型文件**，务必先跟用户确认：
+
+```mermaid
+flowchart TD
+    A[收到视频链接/BV号] --> B{环境就绪?}
+    B -- 是 --> C[执行转录]
+    B -- 否 --> D{问用户是否首次安装}
+    D -- 首次, 用户同意 --> E[执行 Setup 安装]
+    E --> F[预下载模型 medium]
+    F --> C
+    D -- 用户不愿意装 --> G[礼貌说明无法转录]
+    C --> H[交付结果]
+```
+
+> **铁律**: 转录任务**必须**用 `run_in_background` 启动（详见 Step 2），因为 Bash 工具默认超时 120 秒而转录通常需要数分钟。不用 `run_in_background` 导致超时中断被视为**技能使用错误**。
+
 ## 可靠性与效率特性
 
 - **断点续传(`--resume`)**: 长合集转录中途失败, 重跑加 `--resume` 自动复用最新 run 目录, 跳过已完成视频, 只处理剩余项。进度持久化在 `run_dir/progress.json`(原子写)。
@@ -39,6 +57,8 @@ agent_created: true
 
 **⚠️ 核心坑**: WorkBuddy 沙箱环境是**会话级临时**的——每次新对话启动, 之前建的 venv 和 HF 缓存目录都可能不可用。
 **✅ 解法**: 把所有重资产（venv、模型、缓存）装到 **D 盘**持久化路径下, 一次安装永久复用。不占用 C 盘系统空间。
+
+所有路径由脚本内的 `BILI_HOME`(默认 `D:\workbuddy\.bili-transcriber`)统一解析, 与技能目录、安装目录解耦, 技能更新不会丢失数据。
 
 ```
 D:\workbuddy\.bili-transcriber\   ← 所有数据都在这里
@@ -116,32 +136,37 @@ export BILI2TEXT_MODEL_DIR="$BILI_MODEL_DIR/medium"
   --cache-dir "$BILI_CACHE_DIR"
 ```
 
-> **自动探测机制**: `transcribe.py` 会优先检查 `<技能目录>/models/medium/`（C 盘）。
-> 但 D 盘模型不在此路径下, 所以**必须设 `BILI2TEXT_MODEL_DIR`** 或用 `BILI_MODEL_DIR` 指向。
+> **自动探测机制(已更新)**: `transcribe.py` 通过统一的 `BILI_HOME` 解析器定位模型与数据目录,
+> 优先级为 `BILI2TEXT_MODEL_DIR` 环境变量 → `<BILI_HOME>/models/<name>` →
+> 旧版 `<技能目录>/models/<name>`(仅作回退, 技能更新时会被覆盖)。`BILI_HOME` 默认
+> `D:\workbuddy\.bili-transcriber`(已存在的持久化根, 独立于技能/安装目录), 可用环境变量覆盖,
+> 回退到 `~/.bili-transcriber`。因此 **D 盘模型无需再手动设 `BILI2TEXT_MODEL_DIR` 即可自动命中**;
+> 仅当模型放在非默认位置时才需显式指定 `BILI2TEXT_MODEL_DIR`。
 
-### 迁移指南（已有 C 盘环境 → D 盘）
+### 迁移指南（已有模型 → BILI_HOME 持久化根）
 
-如果你之前已经装到 C 盘（`C:\Users\PFH\.workbuddy\binaries\python\envs\default\`），不想重新下载 1.5GB 模型:
+模型与缓存现由 `BILI_HOME`(默认 `D:\workbuddy\.bili-transcriber`)统一解析, 技能目录不再存放数据, 技能更新不会丢模型。若你已有模型在别处(旧技能目录 `.../skills/bilibili-transcriber/models`、C 盘 venv 等), 不想重新下载约 1.5GB, 把它拷到持久化根即可——脚本会自动探测, 无需手设环境变量:
 
 ```bash
 D_BILI="D:/workbuddy/.bili-transcriber"
 
-# 1) 在 D 盘创建 venv
+# 1) 在 D 盘创建 venv(若尚未创建)
 "C:/Users/PFH/.workbuddy/binaries/python/versions/3.13.12/python.exe" \
   -m venv "$D_BILI/venv"
 
-# 2) 拷贝已有模型 (不用重新下载)
-cp -r "C:/Users/PFH/.workbuddy/skills/bilibili-transcriber/models/medium" \
-      "$D_BILI/models/medium"
+# 2) 拷贝已有模型到持久化根(把 <OLD_MODEL_DIR> 换成你的旧模型目录, 内含 model.bin 等)
+cp -r "<OLD_MODEL_DIR>" "$D_BILI/models/medium"
 
 # 3) 安装依赖到新 venv
 "$D_BILI/venv/Scripts/python.exe" scripts/setup_env.py
 
-# 4) 验证
+# 4) 验证: 模型落在 BILI_HOME/models, 脚本可自动探测
 "$D_BILI/venv/Scripts/python.exe" \
-  -c "import yt_dlp, faster_whisper, imageio_ffmpeg; print('✅ 迁移完成')"
-ls "$D_BILI/models/medium/model.bin" && echo "✅ 模型已就位"
+  -c "import yt_dlp, faster_whisper, imageio_ffmpeg; print('✅ 依赖就绪')"
+ls "$D_BILI/models/medium/model.bin" && echo "✅ 模型已就位 (BILI_HOME)"
 ```
+
+> 注: 本机已默认装好 D 盘持久化根(venv + medium 模型), 一般无需迁移, 直接跳到 Workflow 即可。
 
 ## Setup (备选 · 临时/沙箱环境)
 
@@ -152,7 +177,7 @@ ls "$D_BILI/models/medium/model.bin" && echo "✅ 模型已就位"
 $VENV_PYTHON "scripts/setup_env.py"
 # 可选: 先检测本机 GPU 情况(打印 JSON, 不改动):
 $VENV_PYTHON "scripts/setup_env.py" --detect-only
-# 可选: 一次性预下载模型到 <技能>/models/, 之后离线、稳定加载(推荐, 见下方说明)
+# 可选: 一次性预下载模型到 <BILI_HOME>/models/(默认 D:\workbuddy\.bili-transcriber\models), 之后离线、稳定加载(推荐, 见下方说明)
 $VENV_PYTHON "scripts/setup_env.py" --download-model small
 ```
 
@@ -166,7 +191,7 @@ $VENV_PYTHON "scripts/setup_env.py" --download-model small
   - 也可显式 `--device cpu`(强制 CPU) 或 `--device cuda`(强制启用 GPU, 同样会自动复制 cuBLAS)。
   - `ctranslate2` 的 PyPI wheel 本身就是 **CPU+CUDA 双用**的同一个包, 不存在"分别安装 GPU 版/CPU 版"——真正的开关是推理设备(device), 见下方说明。
 - **询问用户**: 若你不确定本机有无 GPU, 可先用 `--detect-only` 看结果; 或在装配环境前用 AskUserQuestion 问用户「用 GPU 还是 CPU?」, 再把 `--device` 传进去。
-- **强烈建议先 `--download-model`** 预下载: 在沙箱/离线/镜像环境, 运行时临时下载常踩坑(符号链接 checkout 失败、大文件走 Xet/CAS 在镜像上 401)。预下载会把模型落地到 `<技能目录>/models/<name>/`(含 `model.bin`)。**`transcribe.py` 现在会自动探测该目录**, 因此预下载后直接 `--model <name>` 即可离线加载, 无需再手设 `BILI2TEXT_MODEL_DIR`(该变量仍可作为显式覆盖, 优先级高于自动探测)。
+- **强烈建议先 `--download-model`** 预下载: 在沙箱/离线/镜像环境, 运行时临时下载常踩坑(符号链接 checkout 失败、大文件走 Xet/CAS 在镜像上 401)。预下载会把模型落地到 `<BILI_HOME>/models/<name>/`(含 `model.bin`, BILI_HOME 默认 `D:\workbuddy\.bili-transcriber`)。**`transcribe.py` 现在会自动探测 `<BILI_HOME>/models`**, 因此预下载后直接 `--model <name>` 即可离线加载, 无需再手设 `BILI2TEXT_MODEL_DIR`(该变量仍可作为显式覆盖, 优先级高于自动探测)。
 - 后续所有调用均用该 venv 解释器运行 `scripts/transcribe.py`。
 
 ## Environment Prerequisites(环境前置 · 必读)
@@ -190,47 +215,88 @@ $VENV_PYTHON "scripts/setup_env.py" --download-model small
 
 ## Workflow
 
-### Step 0 — 预检: 确认持久化环境 + 汇报给用户 (3 秒)
+### Step 0 — 预检: 程序化路径发现 + 汇报给用户 (3 秒)
 
-每次调用此技能时, 优先做预检。**预检结果必须在对话中汇报给用户**, 让用户感知到发生了什么：
+每次调用此技能时, **优先用 `scripts/find_paths.py` 做预检**, 而不是手动写 shell 变量猜路径。
+`find_paths.py` 是 BILI_HOME 解析器的**单一事实来源**, 其输出比 shell 硬编码可靠。
 
 ```bash
-# === 定义持久化路径 ===
-D_BILI="D:/workbuddy/.bili-transcriber"
-BILI_PYTHON="$D_BILI/venv/Scripts/python.exe"
-BILI_MODEL="$D_BILI/models/medium/model.bin"
+# 1) 用 find_paths.py 自动发现路径 (输出 JSON)
+#    需要先找一个可用的 Python 解释器来跑它。
+#    候选方案（按优先级）:
+#     a) D 盘 venv: D:/workbuddy/.bili-transcriber/venv/Scripts/python.exe
+#     b) 托管 Python: C:/Users/PFH/.workbuddy/binaries/python/versions/3.13.12/python.exe
+#     c) 系统 Python: python3 / python
 
-# === 预检 ===
-if [ -f "$BILI_PYTHON" ] && [ -f "$BILI_MODEL" ]; then
-    echo "✅ 持久化环境就绪: D盘 venv + medium 模型"
-    VENV_PYTHON="$BILI_PYTHON"
-    MODEL_NAME="medium"
-    MODEL_DIR="$D_BILI/models/medium"
-    CACHE_DIR="$D_BILI/cache"
-    # 预检通过后输出一句给用户的提示（见下方交互规范）
+# 建议: 用托管 Python 跑 find_paths.py（不依赖 venv 是否存在）
+PYTHON_PROBE="C:/Users/PFH/.workbuddy/binaries/python/versions/3.13.12/python.exe"
+if [ ! -f "$PYTHON_PROBE" ]; then
+    # 回退到系统 python
+    PYTHON_PROBE="python3"
+    command -v "$PYTHON_PROBE" || PYTHON_PROBE="python"
+fi
 
-    # 可选: 执行一键环境检查, 确认所有依赖就绪
-    echo "🔍 正在检查运行环境…"
-    ENV_REPORT=$("$VENV_PYTHON" "scripts/transcribe.py" dummy --check-env 2>/dev/null)
-    echo "$ENV_REPORT" | python -c "import sys,json; d=json.load(sys.stdin); \
-      print('✅ 环境就绪' if d.get('ok') else '⚠️ 环境有缺漏'); \
-      [print(f'  {k}: {v}') for k,v in d.get('dependencies',{}).items()]; \
-      gpu=d.get('gpu',{}); print(f'  GPU: {gpu.get(\"cuda_device_count\",\"?\")} 设备, {gpu.get(\"reason\",\"\")}')"
+# 用 find_paths.py 获取完整的环境报告
+ENV_JSON=$("$PYTHON_PROBE" "scripts/find_paths.py" 2>/dev/null)
+
+# 从 JSON 中提取关键字段（用 python -c 做安全解析）
+eval $(echo "$ENV_JSON" | "$PYTHON_PROBE" -c "
+import sys,json
+d=json.load(sys.stdin)
+# 导出为 shell 变量
+print(f'ENV_OK={\"true\" if d[\"ok\"] else \"false\"}')
+print(f'BILI_HOME={d[\"bili_home\"]}')
+print(f'VENV_PYTHON={d[\"venv_python\"] or \"\"}')
+print(f'ACTIVE_MODEL={d[\"active_model\"] or \"\"}')
+print(f'MODEL_DIR={d[\"models\"].get(d[\"active_model\"],{}).get(\"path\",\"\") if d[\"active_model\"] else \"\"}')
+print(f'CACHE_DIR={d[\"cache_dir\"]}')
+print(f'OUT_DIR={d[\"out_dir\"]}')
+print(f'GPU_TYPE={d[\"gpu\"][\"device_type\"]}')
+# 输出 issues 汇总 + notes 正面信息
+issues = d.get('issues', [])
+for iss in issues:
+    print(f'ISSUE: {iss}')
+notes = d.get('notes', [])
+for n in notes:
+    print(f'NOTE: {n}')
+") || {
+    echo "⚠️ find_paths.py 解析失败，请手动检查路径"
+    ENV_OK="false"
+}
+
+# 检查关键变量是否均有效
+if [ "$ENV_OK" = "true" ] && [ -n "$VENV_PYTHON" ] && [ -f "$VENV_PYTHON" ] && [ -n "$MODEL_DIR" ]; then
+    echo "✅ 环境就绪: $VENV_PYTHON | 模型=$ACTIVE_MODEL | GPU=$GPU_TYPE"
 else
-    echo "⚠️ 持久化环境缺失, 请先执行 Setup"
-    VENV_PYTHON="C:/Users/PFH/.workbuddy/binaries/python/versions/3.13.12/python.exe"
-    MODEL_NAME="medium"
-    MODEL_DIR=""
-    CACHE_DIR=""
+    echo "⚠️ 环境不完整，需要先执行 Setup"
+    echo "   VENV_PYTHON=$VENV_PYTHON, MODEL_DIR=$MODEL_DIR"
 fi
 ```
 
-预检通过后, 后续所有命令用 `$VENV_PYTHON` / `$MODEL_DIR` / `$CACHE_DIR` 替代硬编码路径。
+**预检失败后不要硬着头皮跑** — 向用户解释缺失了什么（可直接用 `ISSUE:` 的文本），引导用户完成 Setup。
 
-> **给用户的交互提示**: 预检通过后, agent 应向用户报告类似:
-> > ✅ 环境就绪，使用 D 盘持久化 venv + medium 模型。现在开始下载视频音轨…
+预检通过后, 后续所有命令用 `$VENV_PYTHON` / `$MODEL_DIR` / `$CACHE_DIR` / `$ACTIVE_MODEL` 替代硬编码路径。
+
+> **⚠️ 变量 session 生命周期**: Step 0 输出的 `$VENV_PYTHON` 等 shell 变量**只在当前 Bash 调用内有效**。
+> 如果你分多次 Bash 工具调用（如 Step 0 一个调用、Step 1 另一个调用），
+> **必须将 Step 0 和 Step 1 合并到同一个 Bash 命令中**，或者用 `export` 持久化到当前 agent session：
 >
-> 让用户知道: a) 不会重新下载依赖; b) 用了哪个模型; c) 当前在做什么。
+> ```bash
+> # 方式 A: 合并到单一 Bash 调用
+> # 预检 → 转录
+> eval $(... find_paths.py 解析...)  # 设置变量
+> "$VENV_PYTHON" scripts/transcribe.py "$INPUT" ...
+>
+> # 方式 B: export 持久化
+> export VENV_PYTHON MODEL_DIR CACHE_DIR ACTIVE_MODEL
+> ```
+>
+> 推荐方式 A（合并调用），简单可靠。
+
+> **给用户的交互提示**: 预检通过后, agent 应先给用户一段简明策略说明, 再开始。示例:
+> > ✅ 环境就绪（venv + $ACTIVE_MODEL 模型）。📋 策略: 本合集 12 个视频约 45 分钟, ${GPU_TYPE/cuda/GPU推理预计 15-20 分钟/CPU推理预计约 1 小时}, 标准反馈模式, 已启用转录缓存。现在开始下载音轨…
+>
+> 让用户知道: a) 不会重新下载依赖; b) 用了哪个模型/设备; c) 范围与预估耗时; d) 当前在做什么。
 
 ### Step 1 — 解析输入并决定是否先枚举系列
 
@@ -249,27 +315,70 @@ fi
 
 正式运行。**必须对用户输出明确的进度反馈**, 不要默默跑完。
 
+> **🚨 超时铁律**: Bash 工具默认超时 120 秒。**转录任务必须用 `run_in_background` 启动**。
+> 正确: `run_in_background: true, command: "$VENV_PYTHON scripts/transcribe.py ..."`
+> 错误: 直接用 Bash 工具跑转录而不设 `run_in_background`。
+> 用 `run_in_background` 后, 脚本在后台运行, 你通过 `--progress-file` 轮询获取进度,
+> 用 `TaskOutput` 在任务完成时拿结果。这让转录数分钟级任务不会因超时被杀死。
+
 ```bash
 # 设置 D 盘持久化路径
-OUT_DIR="${BILI_OUT_DIR:-$D_BILI/transcripts/$(date +%Y%m%d)}"
+OUT_DIR="${OUT_DIR:-$BILI_HOME/transcripts/$(date +%Y%m%d)}"
 PROGRESS_FILE="$OUT_DIR/.progress.json"
+mkdir -p "$OUT_DIR"
 
-# ↑ 预检阶段已设好 VENV_PYTHON / MODEL_DIR / CACHE_DIR
+# ↑ 预检阶段已设好 VENV_PYTHON / MODEL_DIR / CACHE_DIR / ACTIVE_MODEL
 
 # 设置脚本所需环境变量(详见「Environment Prerequisites」章节)
 export BILI2TEXT_MODEL_DIR="$MODEL_DIR"
 
+# =====================================================================
+# 【关键】用 run_in_background 启动转录，避免 Bash 超时杀死进程
+# =====================================================================
+# 在 agent 的实际工具调用中，这对应：
+#   tool: Bash
+#   params: {
+#     command: "...",
+#     run_in_background: true      # ← 必须！转录通常 > 2 分钟
+#   }
+# =====================================================================
 $VENV_PYTHON "scripts/transcribe.py" "$INPUT" \
     --out-dir "$OUT_DIR" \
-    --model "$MODEL_NAME" --lang zh --format "${FORMAT:-txt}" \
+    --model "$ACTIVE_MODEL" --lang zh --format "${FORMAT:-txt}" \
     --device auto --compute-type auto \
     --cache-dir "$CACHE_DIR" \
-    --transcript-cache "${BILI_TRANSCRIPT_CACHE:-$CACHE_DIR/transcripts}" \
+    --transcript-cache "$CACHE_DIR/transcripts" \
     --compact \
     --progress-file "$PROGRESS_FILE" \
     [--limit N] [--preview 120] \
     [--jobs N] [--resume] [--text-mode merged|raw] [--diarize]
 ```
+
+#### 🔄 超时与中断恢复策略
+
+| 场景 | 表现 | 处理方法 |
+|------|------|---------|
+| Bash 超时杀死 (120s) | agent 收到 `timeout` 错误 | 使用 `--resume` 重新运行, 跳过已完成视频; **下次必须用 run_in_background** |
+| 转录中途中断 | 脚本未正常退出, 部分已完成 | `--resume` 自动检测已有 progress.json 并继续 |
+| 模型下载超时 | 首次运行时 HF 下载慢 | 用 `setup_env.py --download-model` 预下载, 或直接用 `BILI2TEXT_MODEL_DIR` 指定本地模型 |
+| yt-dlp 下载超时 | 某集视频下载失败 | `--resume` 跳过失败项, 继续处理其余; 手动重试失败项 |
+| GPU OOM (显存溢出) | 模型加载失败 | 切 `--model small` 或 `--device cpu --compute-type int8` |
+
+**核心原则**: **转录失败不要整体重跑, 加 `--resume` 续传即可**, 脚本会自动跳过已完成的项。
+
+#### 🐾 watchdog 心跳输出
+
+`transcribe.py` 在 `model.transcribe()` 阻塞期间会自动启动 **watchdog 线程**,
+每 15 秒向 stderr 输出一次:
+
+```
+[HH:MM:SS] [进度] 仍在识别: 01_BV1xx.m4a (已用 45 秒)
+[HH:MM:SS] [进度] 仍在识别: 01_BV1xx.m4a (已用 60 秒)
+```
+
+这些心跳可以帮助你在长任务期间**感知到脚本还在运行**。当使用 `run_in_background` 时, 
+你无法实时看到 stderr, 但可以通过 `--progress-file` 轮询获得进度快照; 
+当转录完成, `TaskOutput` 会一次性返回全部输出(含这些心跳行)。
 
 #### 进度反馈规范 (agent 必读)
 
@@ -351,6 +460,21 @@ $VENV_PYTHON "scripts/transcribe.py" "$INPUT" \
 
 本技能的**交互质量**直接决定用户对工具的好感度。以下规范强制约束 agent 的沟通方式。
 
+### 0. 启动前必须描述执行策略（强制, 长任务尤其重要）
+
+**在正式开始转录前, agent 必须先给用户一段简明的「执行策略」说明**, 让用户知道接下来会发生什么、要花多久、用什么配置。绝不允许二话不说直接开跑、或全程沉默。策略至少包含:
+
+- **范围**: 处理哪些视频(全部 / 前 N 集 / 指定分P), 共几个、总时长约多少
+- **配置**: 用哪个模型(medium / 按时长 auto)、走 GPU 还是 CPU
+- **预估耗时**: 基于总时长+模型+设备给出预计完成时间(如 "约 36 分钟")
+- **反馈模式**: 本次用标准 / 详细 / (仅当用户明确要求) 静默
+- **复用情况**: 是否命中转录缓存 / 是否用 `--resume` 断点续传(跳过已完成项)
+
+示例(合集任务):
+> 📋 执行策略: 这个合集共 12 个视频, 合计约 45 分钟。用 medium 模型 + GPU 推理, 预计 15-20 分钟完成。采用标准反馈(每处理几个或每 2-3 分钟汇报一次), 中途可随时让我暂停。已启用转录缓存, 重复视频秒回。
+
+单视频 / 短任务(<5 分钟)也至少一句话带过范围与模型, 不必展开。
+
 ### 1. 每次操作前说清楚在干什么
 
 | 操作 | agent 对用户的说话 |
@@ -365,13 +489,18 @@ $VENV_PYTHON "scripts/transcribe.py" "$INPUT" \
 | GPU 加速 | `⚡ 检测到 NVIDIA GPU，使用 CUDA 加速推理` |
 | 失败 | `❌ 第3个视频转录失败: [原因]。已跳过，继续处理其余视频` |
 
-### 2. 长任务进度汇报策略
+### 2. 长任务进度汇报策略（长任务绝不允许"反馈极少"）
 
-- **< 1 分钟**: 只在开始和结束时各汇报一次
-- **1-5 分钟**: 开始 → 中途 1 次 → 结束
-- **> 5 分钟**: 每完成 3-5 个或每 2 分钟向用户更新一次进度
-- 合集任务启动时告知总集数和预估时长: *"总共 12 个视频, 合计约 45 分钟, 用 medium 模型, 预计 15-20 分钟完成"*
-- 使用 `--progress-file` 轮询获取实时进度, 不要靠猜
+**铁律: 任何超过 5 分钟的任务, 都必须有持续心跳式反馈, 不能一声不吭跑到结束。** 用户感知不到进度 = 体验失败。
+
+- **< 1 分钟**: 开始 + 结束各一次
+- **1-5 分钟**: 开始 → 中途至少 1 次 → 结束
+- **> 5 分钟（合集 / 长视频）**: **每 2-3 分钟** 或 **每完成 2-3 个视频** 必须更新一次(取更密集者); 同时至少要有一次**中点 checkpoint**(如 "已过半 6/12, 预计还剩 ~18 分钟")
+- **> 30 分钟**: 在上述基础上, 每次更新附带「已完成/总数 + 失败数 + 预计剩余」三要素
+- 合集任务**启动时必须**先描述策略(见上方 §0)并告知总集数与预估时长
+- 使用 `--progress-file` 轮询获取实时进度, 不要靠猜; 轮询结果要**转述给用户**, 不要只在内部记着
+
+> 反例(禁止): 12 个视频跑了 40 分钟, 中途只说过一句"开始转录" → 这是**严重违规**, 用户会以为卡死。
 
 ### 3. 错误处理的交互
 
@@ -412,26 +541,29 @@ $VENV_PYTHON "scripts/transcribe.py" "$INPUT" \
 
 如果用户选了需要 SRT, 转录时加 `--format both`。否则只用默认 `--format txt`。
 
-**在开始合集任务 (>2 个视频)** 前, 额外问用户偏好:
+**在开始合集任务 (>2 个视频)** 前, 确认反馈模式(默认标准, 长任务不建议静默):
 
-> 这个合集有 12 个视频, 约 45 分钟。你想要哪种反馈模式?
-> **A) 静默模式 📄** — 只给最终文件, 中间不报进度 (最省 token)
-> **B) 标准模式 📊** — 开始/关键节点/结束时报进度 (推荐)
-> **C) 详细模式 📝** — 每完成一个视频都通报 (最耗 token)
+> 这个合集有 12 个视频, 约 45 分钟。转录期间想怎么接收进度?
+> **B) 标准模式 📊（默认/推荐）** — 每 2-3 分钟或每几个视频汇报一次, 含中点 checkpoint
+> **C) 详细模式 📝** — 每完成一个视频都通报
+> **A) 静默模式 📄** — 仅开始时说一句策略、结束时给结果, 中间不主动报(⚠️ 仅当用户明确说"不用管我/我在忙"时可选; 长任务静默易让人以为卡死)
 
 如果是**单视频或短任务 (<5 分钟)**, 默认标准模式, 不用问。
 
-#### 5b. 智能轮询: 根据预估时长校准频率
+#### 5b. 智能轮询: 根据预估时长校准频率(内部检查节奏)
+
+> 轮询是 **agent 内部**检查 `--progress-file` 的节奏; 它决定了你**最快能多快**把进度转述给用户。
+> 用户面向的更新频率以 §2 为准(>5 分钟任务每 2-3 分钟或每几个视频一次), 因此**内部轮询不能比 §2 更稀疏**。
 
 ```
 --list-only 拿到视频时长 →
   总时长 < 5 分钟  → 不轮询, 等完成
-  总时长 5-30 分钟 → 轮询 1 次 (50% 时)
-  总时长 30-60 分钟 → 每 3 分钟轮询一次
-  总时长 > 60 分钟 → 每 5 分钟轮询一次
+  总时长 5-30 分钟 → 每 2-3 分钟轮询一次(并转述给用户)
+  总时长 30-60 分钟 → 每 2-3 分钟轮询一次
+  总时长 > 60 分钟 → 每 2-3 分钟轮询一次(长任务更需心跳, 不因长就放宽)
 ```
 
-即: **总轮询次数 ≈ 5-6 次**, 不因视频长就无限轮询。
+即: **轮询节奏跟随 §2 的汇报节奏, 长任务反而要更密**, 不因视频长就无限放宽。
 
 #### 5c. 转录缓存: 同一视频第二次 0 token 消耗
 
@@ -439,7 +571,7 @@ $VENV_PYTHON "scripts/transcribe.py" "$INPUT" \
 # 添加 --transcript-cache 指向持久化缓存目录
 # 同一 BV 号第二次转录直接返回结果, 跳过下载和 ASR
 $VENV_PYTHON scripts/transcribe.py "$INPUT" \
-  --transcript-cache "$BILI_BASE/cache/transcripts" \
+  --transcript-cache "${TRANSCRIPT_CACHE_DIR:-$CACHE_DIR/transcripts}" \
   ...
 ```
 
@@ -460,7 +592,7 @@ $VENV_PYTHON scripts/transcribe.py "$INPUT" --compact ...
 |------|-------------|------|---------|
 | 转录缓存 | 整个转录流程 | C 盘空间+1 倍 | 反复看同系列视频 |
 | compact 模式 | JSON 输出大小 -60% | 可读性略降 | 合集/批量任务 |
-| 静默模式 | 全部进度对话 | 用户看不到进度 | 用户不在电脑前 |
+| 静默模式 | 全部进度对话 | 用户全程看不到进度(易误判卡死) | 仅当用户明确说"不用管我"时 |
 | 标准模式(默认) | 适中 | 质量 OK | 大多数场景 |
 | --preview 120 | 结果预览省全文 | 只省读取步骤 | 用户只要大意时 |
 | --no-transcript-cache | — | 不存缓存 | 一次性任务 |
@@ -475,8 +607,10 @@ $VENV_PYTHON scripts/transcribe.py "$INPUT" --compact ...
 # 建议写到 ~/.bashrc 或 ~/.profile 中
 # =============================================
 
-# 基础路径 (所有重资产都在 D 盘)
-export BILI_BASE="D:/workbuddy/.bili-transcriber"
+# 基础路径 (所有重资产都在持久化根, 独立于技能/安装目录)
+# BILI_HOME 为脚本读取的规范变量(旧文档的 BILI_BASE 仍兼容)
+export BILI_HOME="D:/workbuddy/.bili-transcriber"
+export BILI_BASE="$BILI_HOME"   # 兼容旧文档/旧环境变量名
 
 # Python 解释器
 export BILI_PYTHON="$BILI_BASE/venv/Scripts/python.exe"
@@ -560,7 +694,7 @@ agent 应把 `error` 原文转述给用户, 不要自行猜测原因:
 ## Scripts
 
 - `scripts/transcribe.py` — 主流程: 解析 → 下载(原始音轨, 不经 ffprobe) → ffmpeg 转 16k 单声道 wav → 识别 → 输出 JSON 摘要。支持 `--list-only` / `--limit` / `--model`(含 `auto`) / `--lang` / `--device` / `--compute-type` / `--format` / `--preview` / `--jobs` / `--resume` / `--progress-file` / `--cache-dir` / `--text-mode` / `--diarize` / `--transcript-cache`(转录缓存, 省 token) / `--compact`(精简 JSON)。本地模型目录做完整性校验(model.bin + config.json + tokenizer.json); 断点续传写 `run_dir/progress.json`(原子写); 转录缓存按视频 id 复用 txt/srt, 第二次转录零消耗; GPU 启用从 `gpu_utils` 导入, 不再依赖 `setup_env`; 段落合并基于 VAD 时间戳; 说话人分离可选集成 pyannote.audio。启动自动设置 HF 镜像/符号链接/Xet 与沙箱删除钩子环境变量; 支持 `BILI2TEXT_MODEL_DIR` 指定本地模型目录。
-- `scripts/setup_env.py` — 安装 `yt-dlp` + `faster-whisper` + `imageio-ffmpeg` 到当前 venv; 支持 `--device auto|cpu|cuda`(auto 检测并自动复制 cuBLAS 启用 GPU) 与 `--detect-only`(打印 GPU 检测 JSON 不改动); 加 `--download-model <name>` 可把模型预下载到 `<技能>/models/<name>/`(用镜像+禁用符号链接+禁用 Xet), 并提示 `BILI2TEXT_MODEL_DIR` 用法。GPU 检测/启用逻辑从 `gpu_utils` 导入。
+- `scripts/setup_env.py` — 安装 `yt-dlp` + `faster-whisper` + `imageio-ffmpeg` 到当前 venv; 支持 `--device auto|cpu|cuda`(auto 检测并自动复制 cuBLAS 启用 GPU) 与 `--detect-only`(打印 GPU 检测 JSON 不改动); 加 `--download-model <name>` 可把模型预下载到 `<BILI_HOME>/models/<name>/`(用镜像+禁用符号链接+禁用 Xet, BILI_HOME 默认 `D:\workbuddy\.bili-transcriber`), 并提示 `BILI2TEXT_MODEL_DIR` 用法。GPU 检测/启用逻辑从 `gpu_utils` 导入。
 - `scripts/gpu_utils.py` — GPU 检测/启用独立模块, 供 `transcribe.py` 与 `setup_env.py` 共用。提供 `detect_gpu()` / `enable_gpu()` / `resolve_device_arg()`。Windows 下从 NVIDIA NGX / CUDA Toolkit / System32 搜索并复制 cuBLAS 12 DLL; Linux/macOS 跳过复制, 直接用 ctranslate2 wheel 自带运行时。
 
 ## References
