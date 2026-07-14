@@ -657,6 +657,28 @@ export BILI_LANG="zh"
 | CPU, 长合集 | `2-4` | 多核 CPU 可并发, 实测 2-3 倍提速 |
 | CPU, 单视频 | `1` | 单视频并发无意义, 纯增加开销 |
 
+### 性能调优 (`--batch-size`)
+
+faster-whisper 默认 `batch_size` 很低（约 8-16），GPU 处理完一小批就空等下一批数据加载，导致 GPU 利用率忽高忽低。本脚本在 GPU 模式下**自动设为 64**，但你可以手动调优：
+
+| GPU 显存 | 推荐 batch_size | 预期效果 |
+|:---------|:---------------:|:---------|
+| 4GB 以下 | `64`（默认） | GPU 利用率 ~50-70% |
+| 4-8GB | `128` | GPU 利用率 ~70-90% |
+| 8GB+ | `256` | GPU 利用率 ~90%+，几乎跑满 |
+| CPU 模式 | `0`（保持默认） | batch_size 不影响 CPU 速度 |
+
+```bash
+# GPU 8GB: 用 batch_size=128 跑满显卡
+$VENV_PYTHON scripts/transcribe.py "BV..." --batch-size 128
+
+# 极致速度（大显存）:
+$VENV_PYTHON scripts/transcribe.py "BV..." --batch-size 256
+```
+
+> **⚠️ 注意**: batch_size 过大可能导致 OOM（显存溢出）。脚本不会自动回退——如果 OOM，报错后降低 batch_size 重试即可。
+> 识别准确率不受 batch_size 影响，只影响速度。
+
 ### 快速切换配置
 
 ```bash
@@ -693,7 +715,7 @@ agent 应把 `error` 原文转述给用户, 不要自行猜测原因:
 
 ## Scripts
 
-- `scripts/transcribe.py` — 主流程: 解析 → 下载(原始音轨, 不经 ffprobe) → ffmpeg 转 16k 单声道 wav → 识别 → 输出 JSON 摘要。支持 `--list-only` / `--limit` / `--model`(含 `auto`) / `--lang` / `--device` / `--compute-type` / `--format` / `--preview` / `--jobs` / `--resume` / `--progress-file` / `--cache-dir` / `--text-mode` / `--diarize` / `--transcript-cache`(转录缓存, 省 token) / `--compact`(精简 JSON)。本地模型目录做完整性校验(model.bin + config.json + tokenizer.json); 断点续传写 `run_dir/progress.json`(原子写); 转录缓存按视频 id 复用 txt/srt, 第二次转录零消耗; GPU 启用从 `gpu_utils` 导入, 不再依赖 `setup_env`; 段落合并基于 VAD 时间戳; 说话人分离可选集成 pyannote.audio。启动自动设置 HF 镜像/符号链接/Xet 与沙箱删除钩子环境变量; 支持 `BILI2TEXT_MODEL_DIR` 指定本地模型目录。
+- `scripts/transcribe.py` — 主流程: 解析 → 下载(原始音轨, 不经 ffprobe) → ffmpeg 转 16k 单声道 wav → 识别 → 输出 JSON 摘要。支持 `--list-only` / `--limit` / `--model`(含 `auto`) / `--lang` / `--device` / `--compute-type` / `--format` / `--preview` / `--jobs` / `--resume` / `--progress-file` / `--cache-dir` / `--text-mode` / `--diarize` / `--transcript-cache`(转录缓存, 省 token) / `--compact`(精简 JSON) / `--batch-size`(GPU 性能调优).。本地模型目录做完整性校验(model.bin + config.json + tokenizer.json); 断点续传写 `run_dir/progress.json`(原子写); 转录缓存按视频 id 复用 txt/srt, 第二次转录零消耗; GPU 启用从 `gpu_utils` 导入, 不再依赖 `setup_env`; 段落合并基于 VAD 时间戳; 说话人分离可选集成 pyannote.audio。启动自动设置 HF 镜像/符号链接/Xet 与沙箱删除钩子环境变量; 支持 `BILI2TEXT_MODEL_DIR` 指定本地模型目录; GPU 模式自动设 batch_size=64 以充分利用显存。
 - `scripts/setup_env.py` — 安装 `yt-dlp` + `faster-whisper` + `imageio-ffmpeg` 到当前 venv; 支持 `--device auto|cpu|cuda`(auto 检测并自动复制 cuBLAS 启用 GPU) 与 `--detect-only`(打印 GPU 检测 JSON 不改动); 加 `--download-model <name>` 可把模型预下载到 `<BILI_HOME>/models/<name>/`(用镜像+禁用符号链接+禁用 Xet, BILI_HOME 默认 `D:\workbuddy\.bili-transcriber`), 并提示 `BILI2TEXT_MODEL_DIR` 用法。GPU 检测/启用逻辑从 `gpu_utils` 导入。
 - `scripts/gpu_utils.py` — GPU 检测/启用独立模块, 供 `transcribe.py` 与 `setup_env.py` 共用。提供 `detect_gpu()` / `enable_gpu()` / `resolve_device_arg()`。Windows 下从 NVIDIA NGX / CUDA Toolkit / System32 搜索并复制 cuBLAS 12 DLL; Linux/macOS 跳过复制, 直接用 ctranslate2 wheel 自带运行时。
 
