@@ -161,7 +161,7 @@ def convert_to_wav(src: str, ffmpeg: str, dst_dir: Optional[str] = None) -> str:
     try:
         subprocess.run(
             [ffmpeg, "-y", "-i", src, "-ar", "16000", "-ac", "1", "-vn", wav],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, timeout=120,
         )
         log("进度", f"已转码为 wav: {os.path.basename(wav)}")
         # 清理原始音轨(非致命)
@@ -171,6 +171,9 @@ def convert_to_wav(src: str, ffmpeg: str, dst_dir: Optional[str] = None) -> str:
         except OSError as e:
             log("提示", f"原始音轨清理跳过: {e}")
         return wav
+    except subprocess.TimeoutExpired:
+        log("警告", f"ffmpeg 转码超时(2分钟)，跳过: {os.path.basename(src)}")
+        return src
     except subprocess.CalledProcessError as e:
         log("警告", f"ffmpeg 转码失败, 改用原始音轨直接识别: {e}")
         return src
@@ -1106,6 +1109,10 @@ def main(argv=None) -> int:
             for it in all_items:
                 vid = it.get("id", "")
                 if not vid:
+                    continue
+                # --resume 下已完成的视频跳过下载+转录
+                if vid in progress.get("done", {}):
+                    log("跳过", f"续传已完成, 跳过: {vid}")
                     continue
                 cached = os.path.join(cache_dir, f"{vid}.wav")
                 if os.path.isfile(cached):
