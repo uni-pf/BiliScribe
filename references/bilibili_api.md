@@ -2,6 +2,11 @@
 
 本技能通过 `yt-dlp` 拉取音轨, 因此它天然支持 B 站所有常见入口, 也兼容 yt-dlp 支持的千余个平台(YouTube、抖音等)。
 
+> ⚠️ **2026-07 实战发现**: yt-dlp 的 Bilibili extractor 在中国大陆部分网络环境下
+> 频繁出现 `WinError 10054`（远程主机强迫关闭连接）和超时。脚本已内置 **直连 fallback**
+> (`scripts/bili_direct.py`)，在 yt-dlp 失败时自动降级到模拟浏览器请求 + B站官方 API，
+> 无需手动干预。详见下文第 6 节。
+
 ## 1. 支持的输入形式
 
 | 用户输入 | 示例 | 脚本处理 |
@@ -49,3 +54,47 @@
 | `timed out` / `connection` | 网络失败或超时 |
 
 调用方(agent)拿到 `{"ok": false, "error": "..."}` 后, 应把 `error` 原文转述给用户, 不要自行猜测。
+
+## 5. yt-dlp Bilibili API 限流问题与直连 fallback
+
+### 问题现象
+
+中国大陆部分网络环境下, yt-dlp 的 Bilibili extractor 会频繁报错:
+
+```
+ERROR: [BiliBili] 1yjz5BLEoY: Unable to download webpage:
+[WinError 10054] 远程主机强迫关闭了一个现有的连接
+```
+
+或: `The read operation timed out`
+
+### 解决方案: bili_direct.py
+
+脚本现已内置 `bili_direct.py` 模块, 在 yt-dlp 失败时**自动降级**到直连模式:
+
+```
+yt-dlp 失败 → 判断是否为 B站链接 → 尝试 bili_direct 直连
+  ├── --list-only: 用 httpx 抓取页面 HTML, 提取 __INITIAL_STATE__ 
+  │                获取完整分P列表(含 title / cid / duration)
+  └── 下载音轨:   用 cid 请求 playurl API, 获取音频流地址并下载
+```
+
+**自动降级, 无需手动干预**。agent 只会看到正常流程, 唯一变化是 stderr 多一条
+`尝试 B站直连模式` 的日志。
+
+### 手动调用 (agent 备用)
+
+```bash
+# 枚举系列 (替代 --list-only)
+$VENV_PYTHON scripts/bili_direct.py "BV1yjz5BLEoY" --list-only
+
+# 下载单集音频 (替代 yt-dlp 下载)
+$VENV_PYTHON scripts/bili_direct.py "https://www.bilibili.com/video/BV1yjz5BLEoY?p=19" <输出目录>
+```
+
+### 局限
+
+- 仅支持 Bilibili (不是通用方案, yt-dlp 覆盖 1000+ 平台)
+- 依赖 `httpx` (faster-whisper 的依赖链已包含, 无需额外安装)
+- 下载的音频为 `.m4s` 格式 (B站 DASH 分段格式), 需 ffmpeg 转码为 wav
+

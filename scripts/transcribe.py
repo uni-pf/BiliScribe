@@ -68,7 +68,14 @@ from bili_paths import (
     ensure_dir, legacy_skill_models_dir,
 )
 
-AUDIO_EXT = re.compile(r"\.(m4a|opus|webm|mp3|ogg|aac|flac|wav)$", re.I)
+# 备用方案: yt-dlp Bilibili extractor 超时/限流时直连 B站 API
+try:
+    from bili_direct import try_direct_list, try_direct_download, parse_bvid, parse_p
+    HAVE_BILI_DIRECT = True
+except ImportError:
+    HAVE_BILI_DIRECT = False
+
+AUDIO_EXT = re.compile(r"\.(m4a|m4s|opus|webm|mp3|ogg|aac|flac|wav)$", re.I)
 
 # faster-whisper 模型目录必须包含的文件(用于完整性校验)
 MODEL_REQUIRED_FILES = ["model.bin", "config.json", "tokenizer.json"]
@@ -223,12 +230,28 @@ def list_videos(url: str) -> List[dict]:
 
     使用 yt-dlp 的 %(json)s 单行 JSON 输出并 json.loads 解析, 彻底规避标题含
     制表符/换行等特殊字符导致 \t 分隔错位的问题。
+
+    若 yt-dlp 失败（常见于 B站 API 限流/超时），自动降级到直连模式
+    (bili_direct.try_direct_list)，通过解析页面 HTML 获取分P列表。
     """
-    proc = _run_ytdlp([
-        "--flat-playlist", "--simulate", "--no-warnings",
-        "--print", "%(json)s",
-        url,
-    ])
+    try:
+        proc = _run_ytdlp([
+            "--flat-playlist", "--simulate", "--no-warnings",
+            "--print", "%(json)s",
+            url,
+        ])
+    except RuntimeError as e:
+        # yt-dlp 失败 → 尝试 B站直连 fallback
+        err_msg = str(e)
+        if HAVE_BILI_DIRECT:
+            log("进度", f"yt-dlp 枚举失败, 尝试 B站直连模式: {err_msg[:80]}")
+            items = try_direct_list(url)
+            if items is not None:
+                log("进度", f"直连枚举成功: {len(items)} 个视频")
+                return items
+        # 直连也失败, 抛原始异常
+        raise
+
     items: List[dict] = []
     for line in proc.stdout.splitlines():
         line = line.strip()
@@ -308,6 +331,9 @@ def download_audio(url: str, run_dir: str, limit: Optional[int],
     下次同一 id 命中缓存时直接复制 wav 到 run_dir, 跳过下载。
     playlist_items: yt-dlp --playlist-items 参数(逗号分隔序号), 用于只下载
     未命中缓存的条目。
+
+    若 yt-dlp 下载失败（常见于 B站 API 限流），自动降级到直连模式
+    (bili_direct.try_direct_download)，通过 B站 playurl API 下载音频。
     """
     outtmpl = os.path.join(run_dir, "%(playlist_index)02d_%(id)s.%(ext)s")
     # 关键: 只用 -f bestaudio/best, 不加 -x / --audio-format(那会触发
@@ -328,7 +354,20 @@ def download_audio(url: str, run_dir: str, limit: Optional[int],
         # 旧 run_dir 可能残留不完整音轨 → 强制覆盖避免用坏文件
         args = ["--force-overwrites", *args]
     log("进度", f"正在下载音轨: {url}")
-    _run_ytdlp(args)
+    try:
+        _run_ytdlp(args)
+    except RuntimeError as e:
+        # yt-dlp 失败 → 尝试 B站直连 fallback
+        err_msg = str(e)
+        if HAVE_BILI_DIRECT and ("bilibili" in url.lower() or "bili" in url.lower()):
+            log("进度", f"yt-dlp 下载失败, 尝试 B站直连模式: {err_msg[:80]}")
+            direct_path = try_direct_download(url, run_dir)
+            if direct_path is not None and os.path.isfile(direct_path):
+                log("进度", f"直连下载成功: {os.path.basename(direct_path)}")
+                return [direct_path]
+        # 直连也失败, 抛原始异常
+        raise
+
     files = sorted(
         os.path.join(run_dir, f) for f in os.listdir(run_dir)
         if AUDIO_EXT.search(f)
@@ -765,17 +804,17 @@ def check_env() -> dict:
                        ("imageio_ffmpeg", "imageio-ffmpeg (ffmpeg)")]:
         try:
             __import__(mod)
-            report["dependencies"][name] = "✅ 已安装"
+            report["dependencies"][name] = "OK (installed)"
         except ImportError:
-            report["dependencies"][name] = "❌ 未安装"
+            report["dependencies"][name] = "MISSING"
             report["ok"] = False
 
     # 额外检查: ffmpeg 二进制可用
     try:
         exe = get_ffmpeg()
-        report["dependencies"]["ffmpeg_binary"] = f"✅ {exe}"
+        report["dependencies"]["ffmpeg_binary"] = f"OK ({exe})"
     except RuntimeError as e:
-        report["dependencies"]["ffmpeg_binary"] = f"❌ {e}"
+        report["dependencies"]["ffmpeg_binary"] = f"MISSING ({e})"
         report["ok"] = False
 
     # 模型检查
@@ -784,7 +823,7 @@ def check_env() -> dict:
         ok, missing = _validate_local_model(model_dir)
         if ok:
             report["model"]["local_dir"] = model_dir
-            report["model"]["status"] = "✅ 就绪"
+            report["model"]["status"] = "OK"
             report["model"]["size_mb"] = round(
                 sum(os.path.getsize(os.path.join(model_dir, f))
                     for f in os.listdir(model_dir)
@@ -792,7 +831,7 @@ def check_env() -> dict:
             )
         else:
             report["model"]["local_dir"] = model_dir
-            report["model"]["status"] = f"⚠️ 不完整 (缺少: {', '.join(missing)})"
+            report["model"]["status"] = f"INCOMPLETE (missing: {', '.join(missing)})"
             report["model"]["size_mb"] = "?"
     else:
         # 扫描持久化根下的模型目录(默认位置, 独立于技能目录)
@@ -806,12 +845,12 @@ def check_env() -> dict:
                 dpath = os.path.join(base, d)
                 if os.path.isdir(dpath):
                     ok, _ = _validate_local_model(dpath)
-                    tag = "✅" if ok else "⚠️"
-                    label = f"{d} ({tag})"
+                    tag = "[OK]" if ok else "[INCOMPLETE]"
+                    label = f"{d} {tag}"
                     if base == legacy_models:
                         label += " [旧版技能目录, 建议迁移]"
                     available.append(label)
-        report["model"]["builtin_models"] = available if available else "(无)"
+        report["model"]["builtin_models"] = available if available else "(none)"
         report["model"]["home"] = get_bili_home()
 
     # GPU 检测
@@ -843,8 +882,8 @@ def check_env() -> dict:
                 report["disk"]["output_dir"] = d
                 report["disk"]["free_gb"] = round(free_gb, 1)
                 report["disk"]["warning"] = (
-                    f"⚠️ 可用空间不足 ({free_gb:.1f} GB)，长合集可能需要更多"
-                    if free_gb < 5 else "✅ 充足"
+                    f"WARNING: Low disk space ({free_gb:.1f} GB)"
+                    if free_gb < 5 else "OK"
                 )
                 break
             except OSError:
@@ -1005,7 +1044,12 @@ def main(argv=None) -> int:
     # 环境检查模式
     if args.check_env:
         report = check_env()
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        try:
+            out = json.dumps(report, ensure_ascii=False, indent=2)
+            print(out)
+        except UnicodeEncodeError:
+            # Windows GBK 终端无法打印 emoji → 转 ASCII-safe
+            print(json.dumps(report, ensure_ascii=True, indent=2))
         return 0 if report["ok"] else 1
 
     # 输入解析
