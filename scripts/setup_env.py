@@ -29,7 +29,7 @@ ctranslate2 包目录, 从而**一键启用 GPU**, 无需手动安装 CUDA Toolk
     HF_HUB_DISABLE_XET=1                (走普通 HTTPS, 不走 Xet/CAS)
     CODEBUDDY_SAFE_DELETE_SANDBOX=0     (避免沙箱删除钩子抛错)
    并把模型落地到 <BILI_HOME>/models/<name>/ (含 model.bin, BILI_HOME 默认
-   D:\\workbuddy\\.bili-transcriber, 可用环境变量覆盖), 之后用环境变量
+   D:\\bilitool, 可用环境变量覆盖), 之后用环境变量
     BILI2TEXT_MODEL_DIR 指向它即可离线、稳定加载, 无需再碰 HF 缓存。
 """
 import argparse

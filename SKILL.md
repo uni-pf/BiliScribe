@@ -58,10 +58,10 @@ flowchart TD
 **⚠️ 核心坑**: WorkBuddy 沙箱环境是**会话级临时**的——每次新对话启动, 之前建的 venv 和 HF 缓存目录都可能不可用。
 **✅ 解法**: 把所有重资产（venv、模型、缓存）装到 **D 盘**持久化路径下, 一次安装永久复用。不占用 C 盘系统空间。
 
-所有路径由脚本内的 `BILI_HOME`(默认 `D:\workbuddy\.bili-transcriber`)统一解析, 与技能目录、安装目录解耦, 技能更新不会丢失数据。
+所有路径由脚本内的 `BILI_HOME`(默认 `D:\bilitool`)统一解析, 与技能目录、安装目录解耦, 技能更新不会丢失数据。
 
 ```
-D:\workbuddy\.bili-transcriber\   ← 所有数据都在这里
+D:\bilitool\   ← 所有数据都在这里
 ├── venv\           # Python 虚拟环境 (pip 依赖 ~200MB)
 ├── models\         # Whisper 模型文件 (medium=1.5GB)
 ├── cache\          # 音频缓存 (视频越多越大)
@@ -71,7 +71,7 @@ D:\workbuddy\.bili-transcriber\   ← 所有数据都在这里
 ### 第1步: 检查是否已安装 (2 秒预检)
 
 ```bash
-D_BILI="D:/workbuddy/.bili-transcriber"
+D_BILI="D:/bilitool"
 ls "$D_BILI/venv/Scripts/python.exe" && ls "$D_BILI/models/medium/model.bin"
 ```
 
@@ -81,7 +81,7 @@ ls "$D_BILI/venv/Scripts/python.exe" && ls "$D_BILI/models/medium/model.bin"
 ### 第2步: 创建 D 盘 venv + 安装依赖 + 预下载模型
 
 ```bash
-D_BILI="D:/workbuddy/.bili-transcriber"
+D_BILI="D:/bilitool"
 
 # A) 用托管 Python 在 D 盘创建 venv (仅一次)
 "C:/Users/PFH/.workbuddy/binaries/python/versions/3.13.12/python.exe" \
@@ -100,7 +100,7 @@ D_BILI="D:/workbuddy/.bili-transcriber"
 ### 第3步: 验证
 
 ```bash
-D_BILI="D:/workbuddy/.bili-transcriber"
+D_BILI="D:/bilitool"
 
 # 验证依赖
 "$D_BILI/venv/Scripts/python.exe" \
@@ -121,10 +121,10 @@ ls "$D_BILI/models/medium/model.bin" && echo "✅ 模型就绪"
 
 ```bash
 # 建议存到 ~/.bashrc 或 WorkBuddy 的工作区 memory
-export BILI_PYTHON="D:/workbuddy/.bili-transcriber/venv/Scripts/python.exe"
-export BILI_MODEL_DIR="D:/workbuddy/.bili-transcriber/models"
-export BILI_CACHE_DIR="D:/workbuddy/.bili-transcriber/cache"
-export BILI_OUT_DIR="D:/workbuddy/.bili-transcriber/transcripts"
+export BILI_PYTHON="D:/bilitool/venv/Scripts/python.exe"
+export BILI_MODEL_DIR="D:/bilitool/models"
+export BILI_CACHE_DIR="D:/bilitool/cache"
+export BILI_OUT_DIR="D:/bilitool/transcripts"
 export BILI2TEXT_MODEL_DIR="$BILI_MODEL_DIR/medium"
 ```
 
@@ -139,16 +139,16 @@ export BILI2TEXT_MODEL_DIR="$BILI_MODEL_DIR/medium"
 > **自动探测机制(已更新)**: `transcribe.py` 通过统一的 `BILI_HOME` 解析器定位模型与数据目录,
 > 优先级为 `BILI2TEXT_MODEL_DIR` 环境变量 → `<BILI_HOME>/models/<name>` →
 > 旧版 `<技能目录>/models/<name>`(仅作回退, 技能更新时会被覆盖)。`BILI_HOME` 默认
-> `D:\workbuddy\.bili-transcriber`(已存在的持久化根, 独立于技能/安装目录), 可用环境变量覆盖,
+> `D:\bilitool`(已存在的持久化根, 独立于技能/安装目录), 可用环境变量覆盖,
 > 回退到 `~/.bili-transcriber`。因此 **D 盘模型无需再手动设 `BILI2TEXT_MODEL_DIR` 即可自动命中**;
 > 仅当模型放在非默认位置时才需显式指定 `BILI2TEXT_MODEL_DIR`。
 
 ### 迁移指南（已有模型 → BILI_HOME 持久化根）
 
-模型与缓存现由 `BILI_HOME`(默认 `D:\workbuddy\.bili-transcriber`)统一解析, 技能目录不再存放数据, 技能更新不会丢模型。若你已有模型在别处(旧技能目录 `.../skills/bilibili-transcriber/models`、C 盘 venv 等), 不想重新下载约 1.5GB, 把它拷到持久化根即可——脚本会自动探测, 无需手设环境变量:
+模型与缓存现由 `BILI_HOME`(默认 `D:\bilitool`)统一解析, 技能目录不再存放数据, 技能更新不会丢模型。若你已有模型在别处(旧技能目录 `.../skills/bilibili-transcriber/models`、C 盘 venv 等), 不想重新下载约 1.5GB, 把它拷到持久化根即可——脚本会自动探测, 无需手设环境变量:
 
 ```bash
-D_BILI="D:/workbuddy/.bili-transcriber"
+D_BILI="D:/bilitool"
 
 # 1) 在 D 盘创建 venv(若尚未创建)
 "C:/Users/PFH/.workbuddy/binaries/python/versions/3.13.12/python.exe" \
@@ -177,7 +177,7 @@ ls "$D_BILI/models/medium/model.bin" && echo "✅ 模型已就位 (BILI_HOME)"
 $VENV_PYTHON "scripts/setup_env.py"
 # 可选: 先检测本机 GPU 情况(打印 JSON, 不改动):
 $VENV_PYTHON "scripts/setup_env.py" --detect-only
-# 可选: 一次性预下载模型到 <BILI_HOME>/models/(默认 D:\workbuddy\.bili-transcriber\models), 之后离线、稳定加载(推荐, 见下方说明)
+# 可选: 一次性预下载模型到 <BILI_HOME>/models/(默认 D:\bilitool\models), 之后离线、稳定加载(推荐, 见下方说明)
 $VENV_PYTHON "scripts/setup_env.py" --download-model small
 ```
 
@@ -191,7 +191,7 @@ $VENV_PYTHON "scripts/setup_env.py" --download-model small
   - 也可显式 `--device cpu`(强制 CPU) 或 `--device cuda`(强制启用 GPU, 同样会自动复制 cuBLAS)。
   - `ctranslate2` 的 PyPI wheel 本身就是 **CPU+CUDA 双用**的同一个包, 不存在"分别安装 GPU 版/CPU 版"——真正的开关是推理设备(device), 见下方说明。
 - **询问用户**: 若你不确定本机有无 GPU, 可先用 `--detect-only` 看结果; 或在装配环境前用 AskUserQuestion 问用户「用 GPU 还是 CPU?」, 再把 `--device` 传进去。
-- **强烈建议先 `--download-model`** 预下载: 在沙箱/离线/镜像环境, 运行时临时下载常踩坑(符号链接 checkout 失败、大文件走 Xet/CAS 在镜像上 401)。预下载会把模型落地到 `<BILI_HOME>/models/<name>/`(含 `model.bin`, BILI_HOME 默认 `D:\workbuddy\.bili-transcriber`)。**`transcribe.py` 现在会自动探测 `<BILI_HOME>/models`**, 因此预下载后直接 `--model <name>` 即可离线加载, 无需再手设 `BILI2TEXT_MODEL_DIR`(该变量仍可作为显式覆盖, 优先级高于自动探测)。
+- **强烈建议先 `--download-model`** 预下载: 在沙箱/离线/镜像环境, 运行时临时下载常踩坑(符号链接 checkout 失败、大文件走 Xet/CAS 在镜像上 401)。预下载会把模型落地到 `<BILI_HOME>/models/<name>/`(含 `model.bin`, BILI_HOME 默认 `D:\bilitool`)。**`transcribe.py` 现在会自动探测 `<BILI_HOME>/models`**, 因此预下载后直接 `--model <name>` 即可离线加载, 无需再手设 `BILI2TEXT_MODEL_DIR`(该变量仍可作为显式覆盖, 优先级高于自动探测)。
 - 后续所有调用均用该 venv 解释器运行 `scripts/transcribe.py`。
 
 ## Environment Prerequisites(环境前置 · 必读)
@@ -224,7 +224,7 @@ $VENV_PYTHON "scripts/setup_env.py" --download-model small
 # 1) 用 find_paths.py 自动发现路径 (输出 JSON)
 #    需要先找一个可用的 Python 解释器来跑它。
 #    候选方案（按优先级）:
-#     a) D 盘 venv: D:/workbuddy/.bili-transcriber/venv/Scripts/python.exe
+#     a) D 盘 venv: D:/bilitool/venv/Scripts/python.exe
 #     b) 托管 Python: C:/Users/PFH/.workbuddy/binaries/python/versions/3.13.12/python.exe
 #     c) 系统 Python: python3 / python
 
@@ -439,7 +439,7 @@ $VENV_PYTHON "scripts/transcribe.py" "$INPUT" \
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  ✅ 转录完成
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 📁 输出目录: D:\workbuddy\.bili-transcriber\transcripts\20260713
+ 📁 输出目录: D:\bilitool\transcripts\20260713
  📄 文件数:      3 个视频
  📝 总字数:      12,847 字
  ⏱ 总时长:      38 分 21 秒
@@ -518,7 +518,7 @@ $VENV_PYTHON "scripts/transcribe.py" "$INPUT" \
 如果预检发现环境缺失, agent 应向用户说明:
 
 > 🛠 首次使用需要安装环境（仅一次），会将依赖和模型安装到 D 盘持久化目录
-> `D:\workbuddy\.bili-transcriber\`
+> `D:\bilitool\`
 > - 依赖约 200MB
 > - 语音模型 medium 约 1.5GB
 > - 安装完成后后续会话直接复用，不再下载
@@ -609,7 +609,7 @@ $VENV_PYTHON scripts/transcribe.py "$INPUT" --compact ...
 
 # 基础路径 (所有重资产都在持久化根, 独立于技能/安装目录)
 # BILI_HOME 为脚本读取的规范变量(旧文档的 BILI_BASE 仍兼容)
-export BILI_HOME="D:/workbuddy/.bili-transcriber"
+export BILI_HOME="D:/bilitool"
 export BILI_BASE="$BILI_HOME"   # 兼容旧文档/旧环境变量名
 
 # Python 解释器
@@ -657,28 +657,6 @@ export BILI_LANG="zh"
 | CPU, 长合集 | `2-4` | 多核 CPU 可并发, 实测 2-3 倍提速 |
 | CPU, 单视频 | `1` | 单视频并发无意义, 纯增加开销 |
 
-### 性能调优 (`--batch-size`)
-
-faster-whisper 默认 `batch_size` 很低（约 8-16），GPU 处理完一小批就空等下一批数据加载，导致 GPU 利用率忽高忽低。本脚本在 GPU 模式下**自动设为 64**，但你可以手动调优：
-
-| GPU 显存 | 推荐 batch_size | 预期效果 |
-|:---------|:---------------:|:---------|
-| 4GB 以下 | `64`（默认） | GPU 利用率 ~50-70% |
-| 4-8GB | `128` | GPU 利用率 ~70-90% |
-| 8GB+ | `256` | GPU 利用率 ~90%+，几乎跑满 |
-| CPU 模式 | `0`（保持默认） | batch_size 不影响 CPU 速度 |
-
-```bash
-# GPU 8GB: 用 batch_size=128 跑满显卡
-$VENV_PYTHON scripts/transcribe.py "BV..." --batch-size 128
-
-# 极致速度（大显存）:
-$VENV_PYTHON scripts/transcribe.py "BV..." --batch-size 256
-```
-
-> **⚠️ 注意**: batch_size 过大可能导致 OOM（显存溢出）。脚本不会自动回退——如果 OOM，报错后降低 batch_size 重试即可。
-> 识别准确率不受 batch_size 影响，只影响速度。
-
 ### 快速切换配置
 
 ```bash
@@ -715,8 +693,8 @@ agent 应把 `error` 原文转述给用户, 不要自行猜测原因:
 
 ## Scripts
 
-- `scripts/transcribe.py` — 主流程: 解析 → 下载(原始音轨, 不经 ffprobe) → ffmpeg 转 16k 单声道 wav → 识别 → 输出 JSON 摘要。支持 `--list-only` / `--limit` / `--model`(含 `auto`) / `--lang` / `--device` / `--compute-type` / `--format` / `--preview` / `--jobs` / `--resume` / `--progress-file` / `--cache-dir` / `--text-mode` / `--diarize` / `--transcript-cache`(转录缓存, 省 token) / `--compact`(精简 JSON) / `--batch-size`(GPU 性能调优).。本地模型目录做完整性校验(model.bin + config.json + tokenizer.json); 断点续传写 `run_dir/progress.json`(原子写); 转录缓存按视频 id 复用 txt/srt, 第二次转录零消耗; GPU 启用从 `gpu_utils` 导入, 不再依赖 `setup_env`; 段落合并基于 VAD 时间戳; 说话人分离可选集成 pyannote.audio。启动自动设置 HF 镜像/符号链接/Xet 与沙箱删除钩子环境变量; 支持 `BILI2TEXT_MODEL_DIR` 指定本地模型目录; GPU 模式自动设 batch_size=64 以充分利用显存。
-- `scripts/setup_env.py` — 安装 `yt-dlp` + `faster-whisper` + `imageio-ffmpeg` 到当前 venv; 支持 `--device auto|cpu|cuda`(auto 检测并自动复制 cuBLAS 启用 GPU) 与 `--detect-only`(打印 GPU 检测 JSON 不改动); 加 `--download-model <name>` 可把模型预下载到 `<BILI_HOME>/models/<name>/`(用镜像+禁用符号链接+禁用 Xet, BILI_HOME 默认 `D:\workbuddy\.bili-transcriber`), 并提示 `BILI2TEXT_MODEL_DIR` 用法。GPU 检测/启用逻辑从 `gpu_utils` 导入。
+- `scripts/transcribe.py` — 主流程: 解析 → 下载(原始音轨, 不经 ffprobe) → ffmpeg 转 16k 单声道 wav → 识别 → 输出 JSON 摘要。支持 `--list-only` / `--limit` / `--model`(含 `auto`) / `--lang` / `--device` / `--compute-type` / `--format` / `--preview` / `--jobs` / `--resume` / `--progress-file` / `--cache-dir` / `--text-mode` / `--diarize` / `--transcript-cache`(转录缓存, 省 token) / `--compact`(精简 JSON)。本地模型目录做完整性校验(model.bin + config.json + tokenizer.json); 断点续传写 `run_dir/progress.json`(原子写); 转录缓存按视频 id 复用 txt/srt, 第二次转录零消耗; GPU 启用从 `gpu_utils` 导入, 不再依赖 `setup_env`; 段落合并基于 VAD 时间戳; 说话人分离可选集成 pyannote.audio。启动自动设置 HF 镜像/符号链接/Xet 与沙箱删除钩子环境变量; 支持 `BILI2TEXT_MODEL_DIR` 指定本地模型目录。
+- `scripts/setup_env.py` — 安装 `yt-dlp` + `faster-whisper` + `imageio-ffmpeg` 到当前 venv; 支持 `--device auto|cpu|cuda`(auto 检测并自动复制 cuBLAS 启用 GPU) 与 `--detect-only`(打印 GPU 检测 JSON 不改动); 加 `--download-model <name>` 可把模型预下载到 `<BILI_HOME>/models/<name>/`(用镜像+禁用符号链接+禁用 Xet, BILI_HOME 默认 `D:\bilitool`), 并提示 `BILI2TEXT_MODEL_DIR` 用法。GPU 检测/启用逻辑从 `gpu_utils` 导入。
 - `scripts/gpu_utils.py` — GPU 检测/启用独立模块, 供 `transcribe.py` 与 `setup_env.py` 共用。提供 `detect_gpu()` / `enable_gpu()` / `resolve_device_arg()`。Windows 下从 NVIDIA NGX / CUDA Toolkit / System32 搜索并复制 cuBLAS 12 DLL; Linux/macOS 跳过复制, 直接用 ctranslate2 wheel 自带运行时。
 
 ## References

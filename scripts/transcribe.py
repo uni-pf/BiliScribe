@@ -44,7 +44,7 @@
    GPU 检测/启用逻辑已下沉到独立模块 gpu_utils.py。
 3. 本地模型目录: 用 BILI2TEXT_MODEL_DIR 指向已落地的模型目录(含 model.bin +
    配置文件), 跳过 HF 缓存/下载, 最稳。setup_env.py --download-model 可一键预下载。
-   模型/缓存/输出默认落在持久化根 BILI_HOME(D:\\workbuddy\\.bili-transcriber,
+   模型/缓存/输出默认落在持久化根 BILI_HOME(D:\\bilitool,
    可用环境变量覆盖), 与技能目录、安装目录相互独立, 避免技能更新时数据丢失。
 """
 from __future__ import annotations

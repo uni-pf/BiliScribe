@@ -8,7 +8,7 @@
 
 解析优先级(get_bili_home):
   1. 环境变量 BILI_HOME(显式覆盖, 最高优先)
-  2. D:\\workbuddy\\.bili-transcriber(已推荐/已存在的持久化路径)
+  2. D:\\bilitool(已推荐/已存在的持久化路径)
   3. 若 D: 盘存在则自动创建上述路径
   4. 回退到用户配置目录: ~/.bili-transcriber(跨机器/无 D 盘时)
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 
 # 推荐的持久化根(独立于技能目录与安装目录)
-PREFERRED_HOME = "D:/workbuddy/.bili-transcriber"
+PREFERRED_HOME = "D:/bilitool"
 
 
 def get_bili_home() -> str:
